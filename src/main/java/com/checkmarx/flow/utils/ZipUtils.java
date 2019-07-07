@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
@@ -21,11 +22,15 @@ public class ZipUtils {
     public static void zipFile(String fileToZip, String zipFile, String excludePatterns)
             throws IOException {
         List<String> excludeList = null;
+        log.info("Creating zip file {} from contents of path {}", zipFile, fileToZip);
+        log.info("Applying exclusions: {}", excludePatterns);
+
         if(!ScanUtils.empty(excludePatterns)) {
             excludeList = Arrays.asList(excludePatterns.split(","));
         }
-        zipFile = zipFile.replace("\\","/");
-        zipFile = zipFile.replace("./","");
+
+        zipFile = FileSystems.getDefault().getPath(zipFile).toAbsolutePath().toString();
+        log.debug("Zip Absolute path: {}", zipFile);
         try (ZipOutputStream zipOut = new ZipOutputStream(new FileOutputStream(zipFile))) {
             File srcFile = new File(fileToZip);
             if (srcFile.isDirectory()) {
@@ -49,10 +54,13 @@ public class ZipUtils {
                 addToZip(filePath, srcFile + "/" + fileName, zipFile, zipOut, excludePatterns);
             }
         } else {
-            String tmpPath = srcFile.replace("\\","/");
-            tmpPath = tmpPath.replace("./","");
+            String tmpPath = FileSystems.getDefault().getPath(srcFile).toAbsolutePath().toString();
+            tmpPath = tmpPath.replace("/./","/"); //Linux FS
+            tmpPath = tmpPath.replace("\\.\\","\\"); //Windows FS
+
+            log.debug("@@@ {} | {} @@@", zipFile, tmpPath);
             if(tmpPath.equals(zipFile)){
-                log.debug("#########Skipping zip file {}#########", zipFile);
+                log.debug("#########Skipping the new zip file {}#########", zipFile);
                 return;
             }
             if(excludePatterns == null || excludePatterns.isEmpty() || !anyMatches(excludePatterns, filePath)) {
