@@ -197,7 +197,7 @@ public class GitHubController {
                 excludeFolders = Arrays.asList(cxProperties.getExcludeFolders().split(","));
             }
             //build request object
-            String gitUrl = repository.getCloneUrl();
+            String gitUrl = pullRequest.getHead().getRepo().getCloneUrl();
             String token = properties.getToken();
             log.info("Using url: {}", gitUrl);
             String gitAuthUrl = gitUrl.replace(Constants.HTTPS, Constants.HTTPS.concat(token).concat("@"));
