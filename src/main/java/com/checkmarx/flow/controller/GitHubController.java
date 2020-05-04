@@ -7,6 +7,7 @@ import com.checkmarx.flow.dto.BugTracker;
 import com.checkmarx.flow.dto.EventResponse;
 import com.checkmarx.flow.dto.ScanRequest;
 import com.checkmarx.flow.dto.github.*;
+import com.checkmarx.flow.exception.GitHubClientException;
 import com.checkmarx.flow.exception.InvalidTokenException;
 import com.checkmarx.flow.exception.MachinaRuntimeException;
 import com.checkmarx.flow.service.FlowService;
@@ -170,8 +171,6 @@ public class GitHubController {
             }
             ScanRequest.Product p = ScanRequest.Product.valueOf(product.toUpperCase(Locale.ROOT));
             PullRequest pullRequest = event.getPullRequest();
-            String currentBranch = pullRequest.getHead().getRef();
-            String targetBranch = pullRequest.getBase().getRef();
             List<String> branches = new ArrayList<>();
             List<Filter> filters;
             if(!ScanUtils.empty(branch)){
@@ -197,9 +196,17 @@ public class GitHubController {
                 excludeFolders = Arrays.asList(cxProperties.getExcludeFolders().split(","));
             }
             //build request object
-            String gitUrl = pullRequest.getHead().getRepo().getCloneUrl();
+            String gitUrl = repository.getCloneUrl();
+            String ref;
+            try {
+                ref = gitHubService.getPullRequestRef(repository.getOwner().getLogin(), repository.getName(), pullRequest.getNumber(), GitHubService.PullRequestRefType.HEAD).getRef();
+
+            } catch (GitHubClientException e) {
+                gitUrl = pullRequest.getHead().getRepo().getCloneUrl();
+                ref = Constants.CX_BRANCH_PREFIX.concat(pullRequest.getHead().getRef());
+            }
             String token = properties.getToken();
-            log.info("Using url: {}", gitUrl);
+            log.info("Using url: {} ref: {}", gitUrl, ref);
             String gitAuthUrl = gitUrl.replace(Constants.HTTPS, Constants.HTTPS.concat(token).concat("@"));
             gitAuthUrl = gitAuthUrl.replace(Constants.HTTP, Constants.HTTP.concat(token).concat("@"));
 
@@ -220,10 +227,10 @@ public class GitHubController {
                     .repoUrl(repository.getCloneUrl())
                     .repoUrlWithAuth(gitAuthUrl)
                     .repoType(ScanRequest.Repository.GITHUB)
-                    .branch(currentBranch)
-                    .refs(Constants.CX_BRANCH_PREFIX.concat(currentBranch))
-                    .mergeNoteUri(event.getPullRequest().getIssueUrl().concat("/comments"))
-                    .mergeTargetBranch(targetBranch)
+                    .branch(pullRequest.getHead().getRef())
+                    .refs(ref)
+                    .mergeNoteUri(pullRequest.getCommentsUrl())
+                    .mergeTargetBranch(pullRequest.getBase().getRef())
                     .email(null)
                     .incremental(inc)
                     .scanPreset(scanPreset)

@@ -4,6 +4,7 @@ import com.checkmarx.flow.config.FlowProperties;
 import com.checkmarx.flow.config.GitHubProperties;
 import com.checkmarx.flow.dto.*;
 import com.checkmarx.flow.dto.github.Content;
+import com.checkmarx.flow.dto.github.Ref;
 import com.checkmarx.flow.dto.report.PullRequestReport;
 import com.checkmarx.flow.exception.GitHubClientException;
 import com.checkmarx.flow.exception.GitHubClientRunTimeException;
@@ -26,11 +27,24 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.DefaultUriBuilderFactory;
+import org.springframework.web.util.UriComponents;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.*;
 
+
 @Service
 public class GitHubService extends RepoService {
+    public enum PullRequestRefType {
+        HEAD,
+        MERGE;
+
+        @Override
+        public String toString() {
+            return this.name().toLowerCase();
+        }
+    }
+
     private static final Logger log = LoggerFactory.getLogger(GitHubService.class);
 
     private static final String HTTP_BODY_IS_NULL = "HTTP Body is null for content api ";
@@ -51,6 +65,12 @@ public class GitHubService extends RepoService {
     private static final String FILE_CONTENT = "/{namespace}/{repo}/contents/{config}?ref={branch}";
     private static final String LANGUAGE_TYPES = "/{namespace}/{repo}/languages";
     private static final String REPO_CONTENT = "/{namespace}/{repo}/contents?ref={branch}";
+    private static final String SINGLE_REF = "/{namespace}/{repo}/git/ref/{ref}";
+    private static final String MATCHING_REFS = "/{namespace}/{repo}/git/matching-refs/{ref}";
+    private static final UriComponents PR_REF = UriComponentsBuilder.fromPath(
+            "refs/pull/{number}/{pr_ref_type}"
+    ).build();
+
 
     public GitHubService(@Qualifier("flowRestTemplate") RestTemplate restTemplate,
                          GitHubProperties properties,
@@ -66,6 +86,103 @@ public class GitHubService extends RepoService {
         HttpHeaders httpHeaders = new HttpHeaders();
         httpHeaders.set(HttpHeaders.AUTHORIZATION, "token ".concat(properties.getToken()));
         return httpHeaders;
+    }
+
+    private String getPullRequestRefName(Integer pullRequestNumber, PullRequestRefType pullRequestRefType) {
+        String prRefType = "";
+        if (pullRequestRefType != null) {
+            prRefType = pullRequestRefType.toString();
+        }
+        Map<String, String> templateVars = new HashMap<>();
+        templateVars.put("number", pullRequestNumber.toString());
+        templateVars.put("pr_ref_type", prRefType);
+        return PR_REF.expand(templateVars).toUriString();
+    }
+
+    /**
+     * Returns a {@link List} of {@link Ref}s from your Git database that match the supplied name.
+     * <p/>
+     * The {@code refName} parameter must be formatted as {@code heads/<branch name>} for branches
+     * and {@code tags/<tag name>} for tags. If the {@code refName} doesn't exist in the repository,
+     * but existing refs start with {@code refName}, they will be returned as an array.
+     * <p/>
+     * If {@code refName} is empty, this method will return an {@link List} of all the {@link Ref}s
+     * from your Git database, including notes and stashes if they exist on the server. Anything
+     * in the namespace is returned, not just heads and tags.
+     *
+     * @param namespace the repository owner/namespace
+     * @param repoName the repository name
+     * @param refName the refname
+     * @return {@link List} of matching {@link Ref refs}
+     * @throws GitHubClientException if the API request failed or no matching refs were found
+     */
+    public List<Ref> getMatchingRefs(String namespace, String repoName, String refName) throws GitHubClientException {
+        refName = refName.replaceFirst("^refs/", "");
+        String endpoint = properties.getApiUrl().concat(MATCHING_REFS);
+        HttpEntity<?> requestEntity = new HttpEntity<>(createAuthHeaders());
+        Map<String, String> uriVars = new HashMap<>();
+        uriVars.put("namespace", namespace);
+        uriVars.put("repo", repoName);
+        uriVars.put("ref", refName);
+        ResponseEntity<Ref[]> responseEntity = restTemplate.exchange(endpoint, HttpMethod.GET, requestEntity, Ref[].class, uriVars);
+        if (responseEntity.getStatusCode().isError() || responseEntity.getBody() == null) {
+            String msg = String.format("Failed to fetch refs from the %s/%s repository matching '%s'",
+                    namespace, repoName, refName);
+            if (log.isDebugEnabled()) {
+                msg = String.format("%s; Received response: %s", msg, responseEntity.toString());
+            }
+            GitHubClientException e = new GitHubClientException(msg);
+            log.error(e.getMessage());
+            throw e;
+        }
+        return Arrays.asList(responseEntity.getBody());
+    }
+
+    /**
+     * Returns a single {@link Ref} from your Git database.
+     * <p/>
+     * The {@code refName} must be formatted as {@code heads/<branch name>} for branches and
+     * {@code tags/<tag name>} for tags.
+     *
+     * @param namespace the repository owner/namespace
+     * @param repoName the repository name
+     * @param refName the refname
+     * @return the {@link Ref ref}
+     * @throws GitHubClientException if the API request failed or {@code refName} doesn't match an existing ref
+     */
+    public Ref getRef(String namespace, String repoName, String refName) throws GitHubClientException {
+        refName = refName.replaceFirst("^refs/", "");
+        String endpoint = properties.getApiUrl().concat(SINGLE_REF);
+        HttpEntity<?> requestEntity = new HttpEntity<>(createAuthHeaders());
+        Map<String, String> uriVars = new HashMap<>();
+        uriVars.put("namespace", namespace);
+        uriVars.put("repo", repoName);
+        uriVars.put("ref", refName);
+        ResponseEntity<Ref> responseEntity = restTemplate.exchange(endpoint, HttpMethod.GET, requestEntity, Ref.class, uriVars);
+        if (responseEntity.getStatusCode().isError() || responseEntity.getBody() == null) {
+            String msg = String.format("Failed to fetch ref from the %s/%s repository: '%s'",
+                    namespace, repoName, refName);
+            if (log.isDebugEnabled()) {
+                msg = String.format("%s; Received response: %s", msg, responseEntity.toString());
+            }
+            GitHubClientException e = new GitHubClientException(msg);
+            log.error(e.getMessage());
+            throw e;
+        }
+        return responseEntity.getBody();
+    }
+
+    public List<Ref> getPullRequestRefs(String namespace, String repoName, Integer pullRequestNumber) throws GitHubClientException {
+        String ref = getPullRequestRefName(pullRequestNumber, null);
+        return getMatchingRefs(namespace, repoName, ref);
+    }
+
+    public Ref getPullRequestRef(String namespace, String repoName, Integer pullRequestNumber, PullRequestRefType pullRequestRefType) throws GitHubClientException {
+        if (pullRequestRefType == null) {
+            throw new IllegalArgumentException("PullRequestRefType must not be null");
+        }
+        String refName = getPullRequestRefName(pullRequestNumber, pullRequestRefType);
+        return getRef(namespace, repoName, refName);
     }
 
     void processPull(ScanRequest request, ScanResults results) throws GitHubClientException {
@@ -213,7 +330,7 @@ public class GitHubService extends RepoService {
         String endpoint = properties.getApiUrl().concat(REPO_CONTENT);
         endpoint = endpoint.replace("{namespace}", request.getNamespace());
         endpoint = endpoint.replace("{repo}", request.getRepoName());
-        endpoint = endpoint.replace("{branch}", request.getBranch());
+        endpoint = endpoint.replace("{branch}", request.getRefs());
         return endpoint;
     }
 

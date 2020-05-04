@@ -219,7 +219,7 @@ public class FlowService {
                 .withFileExclude(request.getExcludeFiles())
                 .withFolderExclude(request.getExcludeFolders());
         if(!com.checkmarx.sdk.utils.ScanUtils.empty(request.getBranch())){
-            params.withBranch(Constants.CX_BRANCH_PREFIX.concat(request.getBranch()));
+            params.withBranch(request.getRefs());
         }
         if(cxFile != null){
             params.setSourceType(CxScanParams.Type.FILE);
